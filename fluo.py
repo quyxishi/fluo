@@ -24,11 +24,14 @@ tg_bot_token = '<telegram bot token>'
 # TODO: settings ; online menu pref
 # TODO: func for mlocales ; rework mlocales
 # TODO: button in link menu to update last seen 
+# TODO: fix: other user can cancel listening
 
 locale = ''
 
 @dataclass
 class mlocales:
+    emoji_detective = '🕵🏻'
+    # *
     en_localeset = '🇬🇧 *Language set*'
     ru_localeset = '🇷🇺 *Язык установлен*'
     # *
@@ -47,9 +50,9 @@ class mlocales:
     ru_online = 'онлайн'
     en_offline = 'offline'
     ru_offline = 'оффлайн'
-    en_onlinelastseen = en_online + ', last seen %s ago'
+    en_onlinelastseen = en_online + ', last seen `%s` ago'
     ru_onlinelastseen = ru_online + ', последний раз был(а) `%s` назад'
-    en_offlinelastseen = en_offline + ', last seen %s ago'
+    en_offlinelastseen = en_offline + ', last seen `%s` ago'
     ru_offlinelastseen = ru_offline + ', последний раз был(а) `%s` назад'
     # *
     en_closed = '👁‍🗨 *Closed*: '
@@ -57,11 +60,11 @@ class mlocales:
     en_created = '👁‍🗨 *Created*: '
     ru_created = '👁‍🗨 *Создан*: '
     # *
-    en_profilephoto = '📷 Profile photo'
-    ru_profilephoto = '📷 Фото профиля'
+    en_profilephoto = '📷 Photo'
+    ru_profilephoto = '📷 Фото'
     # *
-    en_onlinemenu = '🕵🏻 Online menu'
-    ru_onlinemenu = '🕵🏻 Онлайн меню'
+    en_onlinemenu = '🕵🏻 Online'
+    ru_onlinemenu = '🕵🏻 Онлайн'
     # *
     en_imagereq = '⌛ *Requesting image...*'
     ru_imagereq = '⌛ *Запрашиваю изображение...*'
@@ -101,6 +104,9 @@ class mlocales:
     ru_listeninterrupted = '❌ *Прослушивание прервано*'
     en_listennotrunning = '❌ *Listening is not running*'
     ru_listennotrunning = '❌ *Прослушивание не выполняется*'
+    # *
+    en_refreshonline = '🔄 Refresh'
+    ru_refreshonline = '🔄 Обновить'
 
 
 def initlogging() -> logging.Logger:
@@ -132,6 +138,8 @@ def listenonline(targetid: str) -> dict:
     currenttime = time.strftime('%H:%M:%S %d/%m/%Y', time.localtime(current))
 
     delta = datetime.timedelta(seconds=current - targetlastseen)
+
+    # TODO: errors check ; user can close online during listening or delete account
 
     status = {'first_name': targetinfo['first_name'],
             'last_name': targetinfo['last_name'],
@@ -169,7 +177,8 @@ def inithooks(bot: telebot.TeleBot) -> None:
         inlinemarkup = types.InlineKeyboardMarkup()
         profilebutton = types.InlineKeyboardButton(mlocales.en_profilephoto if locale == 'en' else mlocales.ru_profilephoto, callback_data=f'photo;{profileinfo["id"]}')
         vkonlinebutton = types.InlineKeyboardButton(mlocales.en_onlinemenu if locale == 'en' else mlocales.ru_onlinemenu, callback_data=f'onlinemenu;{profileinfo["id"] if "last_seen" in profileinfo else "-1"}')
-        inlinemarkup.add(profilebutton, vkonlinebutton)
+        refreshbutton = types.InlineKeyboardButton(mlocales.en_refreshonline if locale == 'en' else mlocales.ru_refreshonline, callback_data=f'refresh;{profileinfo["id"]}')
+        inlinemarkup.add(profilebutton, vkonlinebutton, refreshbutton)
 
         if 'last_seen' in profileinfo:
             delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
@@ -198,11 +207,37 @@ def inithooks(bot: telebot.TeleBot) -> None:
 
 
 def initcallbacks(bot: telebot.TeleBot) -> None:
-    @bot.callback_query_handler(func=lambda call: 'setlang;' in call.data)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('refresh;'))
+    def refreshcall(call) -> None:
+        global vk
+
+        chatid = call.message.chat.id
+        targetid = call.data.split(';')[1]
+
+        profileinfo = vk.users.get(user_ids=targetid, fields='status, online, last_seen')
+
+        if len(profileinfo) == 0:
+            bot.send_message(chatid, mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists)
+            return
+        
+        profileinfo = profileinfo[0]
+
+        if 'last_seen' not in profileinfo:
+            bot.send_message(chatid, mlocales.en_unabletime if locale == 'en' else mlocales.ru_unabletime)
+            return
+        
+        delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
+        lastseentime = str(mlocales.en_onlinelastseen % delta if locale == 'en' else mlocales.ru_onlinelastseen % delta) if profileinfo['online'] else str(mlocales.en_offlinelastseen % delta if locale == 'en' else mlocales.ru_offlinelastseen % delta)
+
+        bot.send_message(chatid, f'{mlocales.emoji_detective} *{profileinfo["first_name"]} {profileinfo["last_name"]}*` :: `{lastseentime}')
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('setlang;'))
     def setlangcall(call) -> None:
         global vk
         global langaskmessageid
         global locale
+
+        # TODO: langaskmessageid possible to not exists
 
         chatid = call.message.chat.id
         targetlocale = call.data.split(';')[1]
@@ -212,16 +247,22 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         bot.edit_message_text(mlocales.en_localeset if locale == 'en' else mlocales.ru_localeset, chatid, langaskmessageid)
         bot.send_message(chatid, mlocales.en_profilelink if locale == 'en' else mlocales.ru_profilelink)
 
-    @bot.callback_query_handler(func=lambda call: 'photo;' in call.data)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('photo;'))
     def photocall(call) -> None:
         global vk
 
         chatid = call.message.chat.id
 
-        bot.send_message(chatid, mlocales.en_imagereq if locale == 'en' else mlocales.ru_imagereq)
+        requestmessage = bot.send_message(chatid, mlocales.en_imagereq if locale == 'en' else mlocales.ru_imagereq)
 
         targetid = call.data.split(';')[1]
-        targetinfo = vk.users.get(user_ids=targetid, fields='photo_max_orig, domain')[0]
+        targetinfo = vk.users.get(user_ids=targetid, fields='photo_max_orig, domain')
+
+        if len(targetinfo) == 0:
+            bot.edit_message_text(mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists, chatid, requestmessage.id)
+            return
+    
+        targetinfo = targetinfo[0]
         targetphotourl = targetinfo['photo_max_orig']
 
         photosize = re.findall('size=(.*)&q', targetphotourl)
@@ -236,7 +277,7 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
 
         photoio.close()
     
-    @bot.callback_query_handler(func=lambda call: 'onlinemenu;' in call.data)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('onlinemenu;'))
     def onlinemenucall(call) -> None:
         global onlinemenumessageid
         global listenonlinestatus
@@ -267,7 +308,7 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
 
         onlinemenumessageid = message.id
 
-    @bot.callback_query_handler(func=lambda call: 'startlistenonline;' in call.data)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('startlistenonline;'))
     def listenonlinecall(call) -> None:
         global LOG
         global onlinemenumessageid
@@ -327,7 +368,7 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         
         LOG.info(f'interrupt listening: {targetid}')
     
-    @bot.callback_query_handler(func=lambda call: 'interruptlistenonline;' in call.data)
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('interruptlistenonline;'))
     def interruptlisten(call) -> None:
         global listenonlinestatus
 
