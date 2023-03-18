@@ -5,4 +5,4 @@
 </p>
 
 ## Overview
-**fluo** is a Telegram bot that can spy on users online
+**fluo** is a Telegram bot that can spy on users online on the social network VK
