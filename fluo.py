@@ -113,7 +113,7 @@ def initlogging() -> logging.Logger:
     logformat = '%(asctime)s (%(filename)s:%(lineno)d %(threadName)s) %(levelname)s - %(name)s: %(message)s'
 
     logging.basicConfig(level=logging.INFO, format=logformat)
-    LOG = logging.getLogger('wusid')
+    LOG = logging.getLogger('fluo')
 
     return LOG
 
