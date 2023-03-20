@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from telebot import types
 from vk_api import *
+import threading
 import datetime
 import requests
 import telebot
@@ -23,10 +24,13 @@ tg_bot_token = '<telegram bot token>'
 
 # TODO: settings ; online menu pref
 # TODO: func for mlocales ; rework mlocales
-# TODO: button in link menu to update last seen 
-# TODO: fix: other user can cancel listening
 
+database = {}
 locale = ''
+islistenthreadrunning = False
+
+rqtimestamp = 0
+rqcount = 0
 
 @dataclass
 class mlocales:
@@ -123,10 +127,31 @@ def initvkapi(access_token: str) -> vk_api.VkApiMethod:
     session._auth_token()
 
     return session.get_api()
-    
+
+
+def inituser(userid: int) -> None:
+    global database
+
+    database.update({userid: {'langaskmessageid': 0, 'locale': '', 'onlinemenumessageid': 0, 'listenonlinestatus': False, 'listeningid': 0, 'onlinesleep': 2.0, 'offlinesleep': 10.0}})
+
 
 def listenonline(targetid: str) -> dict:
     global vk
+    global rqtimestamp
+    global rqcount
+
+    # *
+
+    deltatimestamp = time.time() - rqtimestamp
+
+    if deltatimestamp < 1.0 and rqcount == 3:
+        time.sleep(1.0 - deltatimestamp)
+        rqcount = 0
+
+    rqtimestamp = time.time()
+    rqcount += 1
+
+    # *
 
     targetinfo = vk.users.get(user_ids=targetid, fields='online, last_seen')[0]
 
@@ -152,12 +177,73 @@ def listenonline(targetid: str) -> dict:
     return status
 
 
+def listenthread(bot: telebot.TeleBot) -> None:
+    global islistenthreadrunning
+
+    LOG.info('open listenthread')
+
+    paramsdatabase = {}
+
+    while "'listenonlinestatus': True" in str(database): # TODO
+        prevdatabase = {}
+        prevdatabase.update(database)
+
+        for user in prevdatabase:
+            if not prevdatabase[user]['listenonlinestatus']:
+                continue
+            
+            if user not in paramsdatabase:
+                paramsdatabase.update({user: {'previousonline': -1, 'plastseensecond': -1, 'plastseentime': '', 'wentout': -1, 'timeout': 0}})
+            elif time.time() < paramsdatabase[user]['timeout']:
+                continue
+
+            # *
+
+            onlineinfo = listenonline(prevdatabase[user]['listeningid'])
+
+            onlinestatus = onlineinfo['online']
+            currenttime = onlineinfo['currenttime']
+            lastseensecond = onlineinfo['lastseensecond']
+            lastseentime = onlineinfo['lastseentime']
+            delta = onlineinfo['delta']
+
+            previousonline = paramsdatabase[user]['previousonline']
+            plastseensecond = paramsdatabase[user]['plastseensecond']
+            wentout = paramsdatabase[user]['wentout']
+
+            if previousonline != -1 and previousonline != onlinestatus:
+                emojistatus = '🟢' if onlinestatus else '🔴'
+                paramsdatabase[user]['wentout'] = False if onlinestatus else True
+                bot.send_message(user, f'{emojistatus} {mlocales.en_onlinechange if locale == "en" else mlocales.ru_onlinechange}`{previousonline} -> {onlinestatus}`\n\n` ~ ``{currenttime}`')
+
+            if plastseensecond != -1 and abs(lastseensecond - plastseensecond) not in [0, 1] and previousonline == onlinestatus:
+                # NOTE: it is more likely that user sent message
+                paramsdatabase[user]['wentout'] = False
+                bot.send_message(user, f"{mlocales.en_onlineupdate if locale == 'en' else mlocales.ru_onlineupdate}`'{paramsdatabase[user]['plastseentime']}' -> '{lastseentime}'`\n\n` ~ ``{currenttime}`")
+
+            if wentout != -1 and delta.seconds >= 62 and not wentout:
+                paramsdatabase[user]['wentout'] = True
+                bot.send_message(user, f'{mlocales.en_onlinewentout % delta if locale == "en" else mlocales.ru_onlinewentout % delta}\n\n` ~ ``{currenttime}`')
+                
+            paramsdatabase[user]['previousonline'] = onlinestatus
+            paramsdatabase[user]['plastseensecond'] = lastseensecond
+            paramsdatabase[user]['plastseentime'] = lastseentime
+
+            paramsdatabase[user]['timeout'] = time.time() + (prevdatabase[user]['onlinesleep'] if onlinestatus else prevdatabase[user]['offlinesleep'])
+    
+    LOG.info('close listenthread')
+
+    islistenthreadrunning = False
+
+
 def inithooks(bot: telebot.TeleBot) -> None:
-    @bot.message_handler(func=lambda message: len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0 and locale != '')
+    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0)
     def link(message) -> None:
         global vk
 
         chatid = message.chat.id
+        locale = database[chatid]['locale']
+
         statusmessage = bot.send_message(chatid, mlocales.en_sendreq if locale == 'en' else mlocales.ru_sendreq)
 
         profilename = re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)[0][1]
@@ -188,70 +274,78 @@ def inithooks(bot: telebot.TeleBot) -> None:
 
         bot.edit_message_text(f'*{profileinfo["first_name"]} {profileinfo["last_name"]}*\n_{profileinfo["status"]}_\n{lastseentime}\n\n👁‍🗨 *ID:* `{profileinfo["id"]}`\n{mlocales.en_closed if locale == "en" else mlocales.ru_closed}`{profileinfo["is_closed"]}`\n{mlocales.en_created if locale == "en" else mlocales.ru_created}`{registrationdate}`', chatid, statusmessage.id, reply_markup=inlinemarkup)
 
-    @bot.message_handler(func=lambda message: locale == '')
+    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and message.content_type == 'text' and message.text.startswith('/settings'))
+    def settings(message) -> None:
+        return # TODO
+
+    @bot.message_handler(func=lambda message: message.chat.id not in database)
     def prewelcome(message) -> None:
-        global langaskmessageid # TODO
+        global database
+
+        chatid = message.chat.id
+
+        inituser(chatid)
 
         inlinemarkup = types.InlineKeyboardMarkup()
         rubutton = types.InlineKeyboardButton('🇷🇺 Russian', callback_data=f'setlang;ru')
         enbutton = types.InlineKeyboardButton('🇬🇧 English', callback_data=f'setlang;en')
         inlinemarkup.add(rubutton, enbutton)
 
-        askmessage = bot.send_message(message.chat.id, '🌍 *Choose language*', reply_markup=inlinemarkup)
+        askmessage = bot.send_message(chatid, '🌍 *Choose language*', reply_markup=inlinemarkup)
 
-        langaskmessageid = askmessage.id
+        database[chatid]['langaskmessageid'] = askmessage.id
 
-    @bot.message_handler(func=lambda message: True)
+    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '')
     def welcome(message) -> None:
-        bot.send_message(message.chat.id, mlocales.en_profilelink if locale == 'en' else mlocales.ru_profilelink)
+        chatid = message.chat.id
+        bot.send_message(chatid, mlocales.en_profilelink if database[chatid]['locale'] == 'en' else mlocales.ru_profilelink)
 
 
 def initcallbacks(bot: telebot.TeleBot) -> None:
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('refresh;'))
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('refresh;'))
     def refreshcall(call) -> None:
         global vk
 
         chatid = call.message.chat.id
-        targetid = call.data.split(';')[1]
+        locale = database[chatid]['locale']
 
+        targetid = call.data.split(';')[1]
         profileinfo = vk.users.get(user_ids=targetid, fields='status, online, last_seen')
 
         if len(profileinfo) == 0:
             bot.send_message(chatid, mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists)
             return
-        
+
         profileinfo = profileinfo[0]
 
         if 'last_seen' not in profileinfo:
             bot.send_message(chatid, mlocales.en_unabletime if locale == 'en' else mlocales.ru_unabletime)
             return
-        
+
         delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
         lastseentime = str(mlocales.en_onlinelastseen % delta if locale == 'en' else mlocales.ru_onlinelastseen % delta) if profileinfo['online'] else str(mlocales.en_offlinelastseen % delta if locale == 'en' else mlocales.ru_offlinelastseen % delta)
 
         bot.send_message(chatid, f'{mlocales.emoji_detective} *{profileinfo["first_name"]} {profileinfo["last_name"]}*` :: `{lastseentime}')
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('setlang;'))
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('setlang;'))
     def setlangcall(call) -> None:
         global vk
-        global langaskmessageid
-        global locale
-
-        # TODO: langaskmessageid possible to not exists
+        global database
 
         chatid = call.message.chat.id
         targetlocale = call.data.split(';')[1]
 
-        locale = targetlocale
+        database[chatid]['locale'] = targetlocale
 
-        bot.edit_message_text(mlocales.en_localeset if locale == 'en' else mlocales.ru_localeset, chatid, langaskmessageid)
-        bot.send_message(chatid, mlocales.en_profilelink if locale == 'en' else mlocales.ru_profilelink)
+        bot.edit_message_text(mlocales.en_localeset if targetlocale == 'en' else mlocales.ru_localeset, chatid, database[chatid]['langaskmessageid'])
+        bot.send_message(chatid, mlocales.en_profilelink if targetlocale == 'en' else mlocales.ru_profilelink)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('photo;'))
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('photo;'))
     def photocall(call) -> None:
         global vk
 
         chatid = call.message.chat.id
+        locale = database[chatid]['locale']
 
         requestmessage = bot.send_message(chatid, mlocales.en_imagereq if locale == 'en' else mlocales.ru_imagereq)
 
@@ -261,7 +355,7 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         if len(targetinfo) == 0:
             bot.edit_message_text(mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists, chatid, requestmessage.id)
             return
-    
+
         targetinfo = targetinfo[0]
         targetphotourl = targetinfo['photo_max_orig']
 
@@ -276,16 +370,16 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         bot.send_photo(chatid, photoio, caption=caption)
 
         photoio.close()
-    
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('onlinemenu;'))
+
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('onlinemenu;'))
     def onlinemenucall(call) -> None:
-        global onlinemenumessageid
-        global listenonlinestatus
+        global database
 
         chatid = call.message.chat.id
+        locale = database[chatid]['locale']
 
         try:
-            if listenonlinestatus:
+            if database[chatid]['listenonlinestatus']:
                 bot.send_message(chatid, mlocales.en_listenalready if locale == 'en' else mlocales.ru_listenalready)
                 return
         except NameError:
@@ -301,84 +395,54 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         offlinesleep = 10.0
 
         markupinline = types.InlineKeyboardMarkup()
-        listenbutton = types.InlineKeyboardButton(mlocales.en_listenonline if locale == 'en' else mlocales.ru_listenonline, callback_data=f'startlistenonline;{targetid};{onlinesleep};{offlinesleep}')
+        listenbutton = types.InlineKeyboardButton(mlocales.en_listenonline if locale == 'en' else mlocales.ru_listenonline, callback_data=f'startlistenonline;{targetid}')
         markupinline.add(listenbutton)
 
         message = bot.send_message(chatid, f'{mlocales.en_onlinemenuheader if locale == "en" else mlocales.ru_onlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{onlinesleep}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{offlinesleep}s`', reply_markup=markupinline)
 
-        onlinemenumessageid = message.id
+        database[chatid]['onlinemenumessageid'] = message.id
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('startlistenonline;'))
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('startlistenonline;'))
     def listenonlinecall(call) -> None:
         global LOG
-        global onlinemenumessageid
-        global listenonlinestatus
-
-        calldatasplit = call.data.split(';')
+        global database
+        global islistenthreadrunning
 
         chatid = call.message.chat.id
-        targetid = calldatasplit[1]
+        locale = database[chatid]['locale']
+        
+        targetid = call.data.split(';')[1]
 
-        listenonlinestatus = True
-        onlinesleep = float(calldatasplit[2]) # TODO
-        offlinesleep = float(calldatasplit[3])
+        database[chatid]['listeningid'] = targetid
+        database[chatid]['listenonlinestatus'] = True
 
         markupinline = types.InlineKeyboardMarkup()
-        cancelbutton = types.InlineKeyboardButton(mlocales.en_cancellisten if locale == 'en' else mlocales.ru_cancellisten, callback_data=f'interruptlistenonline;{targetid}')
+        cancelbutton = types.InlineKeyboardButton(mlocales.en_cancellisten if locale == 'en' else mlocales.ru_cancellisten, callback_data=f'interruptlistenonline;')
         markupinline.add(cancelbutton)
 
-        bot.edit_message_text(f'{mlocales.en_postonlinemenuheader if locale == "en" else mlocales.ru_postonlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{onlinesleep}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{offlinesleep}s`', chatid, onlinemenumessageid, reply_markup=markupinline)
+        bot.edit_message_text(f'{mlocales.en_postonlinemenuheader if locale == "en" else mlocales.ru_postonlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{database[chatid]["onlinesleep"]}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{database[chatid]["offlinesleep"]}s`', chatid, database[chatid]['onlinemenumessageid'], reply_markup=markupinline)
 
         LOG.info(f'start listening: id{targetid}')
 
-        previousonline = -1
-        plastseensecond = -1
-        plastseentime = ''
-        wentout = -1
+        if not islistenthreadrunning:
+            islistenthreadrunning = True
+            lthread = threading.Thread(target=listenthread, args=(bot,))
+            lthread.start()
 
-        while listenonlinestatus:
-            onlineinfo = listenonline(targetid)
-
-            onlinestatus = onlineinfo['online']
-            currenttime = onlineinfo['currenttime']
-            lastseensecond = onlineinfo['lastseensecond']
-            lastseentime = onlineinfo['lastseentime']
-            delta = onlineinfo['delta']
-
-            if previousonline != -1 and previousonline != onlinestatus:
-                emojistatus = '🟢' if onlinestatus else '🔴'
-                wentout = False if onlinestatus else True
-                bot.send_message(chatid, f'{emojistatus} {mlocales.en_onlinechange if locale == "en" else mlocales.ru_onlinechange}`{previousonline} -> {onlinestatus}`\n\n` ~ ``{currenttime}`')
-
-            if plastseensecond != -1 and abs(lastseensecond - plastseensecond) not in [0, 1] and previousonline == onlinestatus:
-                # NOTE: it is more likely that user sent message
-                wentout = False
-                bot.send_message(chatid, f"{mlocales.en_onlineupdate if locale == 'en' else mlocales.ru_onlineupdate}`'{plastseentime}' -> '{lastseentime}'`\n\n` ~ ``{currenttime}`")
-
-            if wentout != -1 and delta.seconds >= 62 and not wentout:
-                wentout = True
-                bot.send_message(chatid, f'{mlocales.en_onlinewentout % delta if locale == "en" else mlocales.ru_onlinewentout % delta}\n\n` ~ ``{currenttime}`')
-                
-            previousonline = onlinestatus
-            plastseensecond = lastseensecond
-            plastseentime = lastseentime
-
-            if listenonlinestatus:
-                time.sleep(onlinesleep if onlinestatus else offlinesleep)
-        
-        LOG.info(f'interrupt listening: {targetid}')
-    
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('interruptlistenonline;'))
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('interruptlistenonline;'))
     def interruptlisten(call) -> None:
-        global listenonlinestatus
+        global database
 
-        try:
-            listenonlinestatus
-        except NameError:
-            listenonlinestatus = False
-        finally:
-            bot.send_message(call.message.chat.id, str(mlocales.en_listeninterrupted if locale == 'en' else mlocales.ru_listeninterrupted) if listenonlinestatus else str(mlocales.en_listennotrunning if locale == 'en' else mlocales.ru_listennotrunning))
-            listenonlinestatus = False
+        # NOTE: workerthreads limit is set to 2.
+
+        chatid = call.message.chat.id
+        locale = database[chatid]['locale']
+
+        bot.send_message(chatid, str(mlocales.en_listeninterrupted if locale == 'en' else mlocales.ru_listeninterrupted) if database[chatid]['listenonlinestatus'] else str(mlocales.en_listennotrunning if locale == 'en' else mlocales.ru_listennotrunning))
+        database[chatid]['listenonlinestatus'] = False
+
+        LOG.info(f'interrupt listening: {database[chatid]["listeningid"]}')
+
 
 def main() -> int:
     global LOG
