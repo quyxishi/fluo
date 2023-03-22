@@ -126,7 +126,7 @@ class mlocales:
     ru_friendsmenuheader = '*Меню друзей*\n_Расширенная информация о друзьях пользователя_'
     # *
     en_analyzefriendsheader = '*Analyze friends*\n_The most common geodata among friends_'
-    ru_analyzefriendsheader = '*Анализ друзей*\n_Самые распространненые геоданные среди друзей_'
+    ru_analyzefriendsheader = '*Анализ друзей*\n_Самые распространенные геоданные среди друзей_'
     # *
     en_friendscount = '👤 *Friends count:* '
     ru_friendscount = '👤 *Количество друзей:* '
