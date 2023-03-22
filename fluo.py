@@ -22,6 +22,7 @@ tg_bot_token = '<telegram bot token>'
 # *
 
 
+# TODO: rewrite on aiogram
 # TODO: settings ; online menu pref
 # TODO: func for mlocales ; rework mlocales
 
@@ -111,6 +112,32 @@ class mlocales:
     # *
     en_refreshonline = '🔄 Refresh'
     ru_refreshonline = '🔄 Обновить'
+    # *
+    en_friendsmenu = '👤 Friends'
+    ru_friendsmenu = '👤 Друзья'
+    # *
+    en_profileclosed = '❌ *Profile is closed*'
+    ru_profileclosed = '❌ *Профиль закрыт*'
+    # *
+    en_analyzefriends = '🕵🏻 Analyze friends'
+    ru_analyzefriends = '🕵🏻 Анализ друзей'
+    # *
+    en_friendsmenuheader = '*Friends menu*\n_Advanced information about the users friends_'
+    ru_friendsmenuheader = '*Меню друзей*\n_Расширенная информация о друзьях пользователя_'
+    # *
+    en_analyzefriendsheader = '*Analyze friends*\n_The most common geodata among friends_'
+    ru_analyzefriendsheader = '*Анализ друзей*\n_Самые распространненые геоданные среди друзей_'
+    # *
+    en_friendscount = '👤 *Friends count:* '
+    ru_friendscount = '👤 *Количество друзей:* '
+    en_country = '🌍 *Country:* '
+    ru_country = '🌍 *Страна:* '
+    en_city = '🏙️ *City:* '
+    ru_city = '🌃 *Город:* '
+    en_university = '🎓 *University:* '
+    ru_university = '🎓 *Университет:* '
+    en_analysistime = '⌛ *Analysis time:* '
+    ru_analysistime = '⌛ *Время анализа:* '
 
 
 def initlogging() -> logging.Logger:
@@ -236,6 +263,10 @@ def listenthread(bot: telebot.TeleBot) -> None:
     islistenthreadrunning = False
 
 
+def commonfromlist(x: list) -> any:
+    return max(set(x), key=x.count) if x else 'None'
+
+
 def inithooks(bot: telebot.TeleBot) -> None:
     @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0)
     def link(message) -> None:
@@ -263,8 +294,9 @@ def inithooks(bot: telebot.TeleBot) -> None:
         inlinemarkup = types.InlineKeyboardMarkup()
         profilebutton = types.InlineKeyboardButton(mlocales.en_profilephoto if locale == 'en' else mlocales.ru_profilephoto, callback_data=f'photo;{profileinfo["id"]}')
         vkonlinebutton = types.InlineKeyboardButton(mlocales.en_onlinemenu if locale == 'en' else mlocales.ru_onlinemenu, callback_data=f'onlinemenu;{profileinfo["id"] if "last_seen" in profileinfo else "-1"}')
+        friendsbutton = types.InlineKeyboardButton(mlocales.en_friendsmenu if locale == 'en' else mlocales.ru_friendsmenu, callback_data=f'friendsmenu;{profileinfo["id"] if not profileinfo["is_closed"] else "-1"}')
         refreshbutton = types.InlineKeyboardButton(mlocales.en_refreshonline if locale == 'en' else mlocales.ru_refreshonline, callback_data=f'refresh;{profileinfo["id"]}')
-        inlinemarkup.add(profilebutton, vkonlinebutton, refreshbutton)
+        inlinemarkup.add(profilebutton, vkonlinebutton, friendsbutton, refreshbutton)
 
         if 'last_seen' in profileinfo:
             delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
@@ -378,12 +410,9 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
         chatid = call.message.chat.id
         locale = database[chatid]['locale']
 
-        try:
-            if database[chatid]['listenonlinestatus']:
-                bot.send_message(chatid, mlocales.en_listenalready if locale == 'en' else mlocales.ru_listenalready)
-                return
-        except NameError:
-            pass
+        if database[chatid]['listenonlinestatus']:
+            bot.send_message(chatid, mlocales.en_listenalready if locale == 'en' else mlocales.ru_listenalready)
+            return
 
         targetid = call.data.split(';')[1]
 
@@ -391,16 +420,30 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
             bot.send_message(chatid, mlocales.en_unabletime if locale == 'en' else mlocales.ru_unabletime)
             return
 
-        onlinesleep = 2.0
-        offlinesleep = 10.0
-
         markupinline = types.InlineKeyboardMarkup()
         listenbutton = types.InlineKeyboardButton(mlocales.en_listenonline if locale == 'en' else mlocales.ru_listenonline, callback_data=f'startlistenonline;{targetid}')
         markupinline.add(listenbutton)
 
-        message = bot.send_message(chatid, f'{mlocales.en_onlinemenuheader if locale == "en" else mlocales.ru_onlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{onlinesleep}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{offlinesleep}s`', reply_markup=markupinline)
+        message = bot.send_message(chatid, f'{mlocales.en_onlinemenuheader if locale == "en" else mlocales.ru_onlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{database[chatid]["onlinesleep"]}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{database[chatid]["offlinesleep"]}s`', reply_markup=markupinline)
 
         database[chatid]['onlinemenumessageid'] = message.id
+
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('friendsmenu;'))
+    def friendsmenucall(call) -> None:
+        chatid = call.message.chat.id
+        locale = database[chatid]['locale']
+
+        targetid = call.data.split(';')[1]
+
+        if targetid == '-1':
+            bot.send_message(chatid, mlocales.en_profileclosed if locale == 'en' else mlocales.ru_profileclosed)
+            return
+        
+        markupinline = types.InlineKeyboardMarkup()
+        analyzebutton = types.InlineKeyboardButton(mlocales.en_analyzefriends if locale == 'en' else mlocales.ru_analyzefriends, callback_data=f'analyzefriends;{targetid}')
+        markupinline.add(analyzebutton)
+
+        bot.send_message(chatid, f'{mlocales.en_friendsmenuheader if locale == "en" else mlocales.ru_friendsmenuheader}\n\n👁‍🗨 *ID:* `{targetid}`', reply_markup=markupinline)
 
     @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('startlistenonline;'))
     def listenonlinecall(call) -> None:
@@ -428,6 +471,41 @@ def initcallbacks(bot: telebot.TeleBot) -> None:
             islistenthreadrunning = True
             lthread = threading.Thread(target=listenthread, args=(bot,))
             lthread.start()
+
+    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('analyzefriends;'))
+    def analyzefriendscall(call) -> None:
+        global vk
+        global LOG
+
+        chatid = call.message.chat.id
+        locale = database[chatid]['locale']
+        
+        targetid = call.data.split(';')[1]
+
+        statusmessage = bot.send_message(chatid, mlocales.en_sendreq if locale == 'en' else mlocales.ru_sendreq)
+        targetfriends = vk.friends.get(user_id=targetid, fields='city, country, universities')
+
+        # TODO: errors check
+
+        bot.edit_message_text(mlocales.en_parseresp if locale == 'en' else mlocales.ru_parseresp, chatid, statusmessage.id)
+
+        tstart = time.time()
+        countries, cities, universities = [], [], []
+
+        for friend in targetfriends['items']:
+            if 'country' in friend and re.search('[a-zA-Zа-яА-Я]', friend['country']['title']):
+                countries.append(friend['country']['title'])
+
+            if 'city' in friend and re.search('[a-zA-Zа-яА-Я]', friend['city']['title']):
+                cities.append(friend['city']['title'])
+
+            if 'universities' in friend and len(friend['universities']) > 0 and re.search('[a-zA-Zа-яА-Я]', friend['universities'][0]['name']):
+                universities.append(friend['universities'][0]['name'])
+
+        country, city, university = commonfromlist(countries), commonfromlist(cities), commonfromlist(universities)
+        tend = time.time()
+
+        bot.edit_message_text(f'{mlocales.en_analyzefriendsheader if locale == "en" else mlocales.ru_analyzefriendsheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_friendscount if locale == "en" else mlocales.ru_friendscount}`{targetfriends["count"]}`\n{mlocales.en_country if locale == "en" else mlocales.ru_country}`{country}`\n{mlocales.en_city if locale == "en" else mlocales.ru_city}`{city}`\n{mlocales.en_university if locale == "en" else mlocales.ru_university}`{university}`\n{mlocales.en_analysistime if locale == "en" else mlocales.ru_analysistime}`{round((tend - tstart) * 1000)}ms`', chatid, statusmessage.id)
 
     @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('interruptlistenonline;'))
     def interruptlisten(call) -> None:
