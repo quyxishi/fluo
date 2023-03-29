@@ -1,201 +1,203 @@
 from dataclasses import dataclass
-from telebot import types
-from vk_api import *
+from loguru import logger
+import aiogram as aiog
+import aiohttp as aioh
 import threading
 import datetime
-import requests
-import telebot
-import logging
+import vkbottle
+import asyncio
 import time
 import sys
 import re
 import io
 
 
-# * ~ configuration
+# ~
 
-# TODO: guide
-
-vk_app_token = '<vk standalone-application token>'
-tg_bot_token = '<telegram bot token>'
 
 # *
 
+vk_app_token: str = '<vk standalone-application token>'
+tg_bot_token: str = '<telegram bot token>'
 
-# TODO: rewrite on aiogram
-# TODO: settings ; online menu pref
-# TODO: func for mlocales ; rework mlocales
+# *
 
-database = {}
-locale = ''
-islistenthreadrunning = False
+vk: vkbottle.API
+bot: aiog.Bot
+dp: aiog.Dispatcher
 
-rqtimestamp = 0
-rqcount = 0
+database: dict = {}
+locale: str = ''
+islistenthreadrunning: bool = False
 
 @dataclass
 class mlocales:
-    emoji_detective = '🕵🏻'
+    emoji_detective: str = '🕵🏻'
+    emoji_man: str = '👨'
+    emoji_woman: str = '👩'
+    emoji_person: str = '👤'
     # *
-    en_localeset = '🇬🇧 *Language set*'
-    ru_localeset = '🇷🇺 *Язык установлен*'
+    emoji_platform_1: str = '📱'
+    emoji_platform_2: str = '📱 (iPhone)'
+    emoji_platform_3: str = '📱 (iPad)'
+    emoji_platform_4: str = '📱 (Android)'
+    emoji_platform_5: str = '📱 (Windows Phone)'
+    emoji_platform_6: str = '💻 (Windows 8)'
+    emoji_platform_7: str = '💻'
     # *
-    en_profilelink = '🕵🏻 *Send me link to vk profile, like:*\n` * ``https://vk.com/id1`\n` * ``durov`'
-    ru_profilelink = '🕵🏻 *Отправь мне ссылку на вк профиль, к примеру:*\n` * ``https://vk.com/id1`\n` * ``durov`'
+    en_localeset: str = '🇬🇧 *Language set*'
+    ru_localeset: str = '🇷🇺 *Язык установлен*'
     # *
-    en_sendreq = '⌛ *Sending request...*'
-    ru_sendreq = '⌛ *Отправляю запрос...*'
-    en_parseresp = '⌛ *Parsing response...*'
-    ru_parseresp = '⌛ *Обрабатываю ответ...*'
+    en_profilelink: str = '🕵🏻 *Send me link to vk profile, like:*\n` * ``https://vk.com/id1`\n` * ``durov`'
+    ru_profilelink: str = '🕵🏻 *Отправь мне ссылку на вк профиль, к примеру:*\n` * ``https://vk.com/id1`\n` * ``durov`'
     # *
-    en_usernotexists = '❌ *Seems that the user does not exist*'
-    ru_usernotexists = '❌ *Похоже, что пользователь не существует*'
+    en_sendreq: str = '⌛ *Sending request\.\.\.*'
+    ru_sendreq: str = '⌛ *Отправляю запрос\.\.\.*'
+    en_parseresp: str = '⌛ *Parsing response\.\.\.*'
+    ru_parseresp: str = '⌛ *Обрабатываю ответ\.\.\.*'
     # *
-    en_online = 'online'
-    ru_online = 'онлайн'
-    en_offline = 'offline'
-    ru_offline = 'оффлайн'
-    en_onlinelastseen = en_online + ', last seen `%s` ago'
-    ru_onlinelastseen = ru_online + ', последний раз был(а) `%s` назад'
-    en_offlinelastseen = en_offline + ', last seen `%s` ago'
-    ru_offlinelastseen = ru_offline + ', последний раз был(а) `%s` назад'
+    en_usernotexists: str = '❌ *Seems that the user does not exist*'
+    ru_usernotexists: str = '❌ *Похоже, что пользователь не существует*'
     # *
-    en_closed = '👁‍🗨 *Closed*: '
-    ru_closed = '👁‍🗨 *Закрыт*: '
-    en_created = '👁‍🗨 *Created*: '
-    ru_created = '👁‍🗨 *Создан*: '
+    en_online: str = 'online'
+    ru_online: str = 'онлайн'
+    en_offline: str = 'offline'
+    ru_offline: str = 'оффлайн'
+    en_onlinelastseen: str = en_online + ', last seen `%s` ago'
+    ru_onlinelastseen: str = ru_online + ', последний раз был(а) `%s` назад'
+    en_offlinelastseen: str = en_offline + ', last seen `%s` ago'
+    ru_offlinelastseen: str = ru_offline + ', последний раз был(а) `%s` назад'
     # *
-    en_profilephoto = '📷 Photo'
-    ru_profilephoto = '📷 Фото'
+    en_closed: str = '👁‍🗨 *Closed*: '
+    ru_closed: str = '👁‍🗨 *Закрыт*: '
+    en_created: str = '👁‍🗨 *Created*: '
+    ru_created: str = '👁‍🗨 *Создан*: '
     # *
-    en_onlinemenu = '🕵🏻 Online'
-    ru_onlinemenu = '🕵🏻 Онлайн'
+    en_profilephoto: str = '📷 Photo'
+    ru_profilephoto: str = '📷 Фото'
     # *
-    en_imagereq = '⌛ *Requesting image...*'
-    ru_imagereq = '⌛ *Запрашиваю изображение...*'
+    en_onlinemenu: str = '🕵🏻 Online'
+    ru_onlinemenu: str = '🕵🏻 Онлайн'
     # *
-    en_listenalready = '❌ *Listening already running*'
-    ru_listenalready = '❌ *Прослушивание уже запущено*'
+    en_imagereq: str = '⌛ *Requesting image\.\.\.*'
+    ru_imagereq: str = '⌛ *Запрашиваю изображение\.\.\.*'
     # *
-    en_unabletime = '❌ *Unable to retrieve last seen timestamp*'
-    ru_unabletime = '❌ *Невозможно получить время последнего посещения*'
+    en_listenalready: str = '❌ *Listening already running*'
+    ru_listenalready: str = '❌ *Отслеживание уже запущено*'
     # *
-    en_listenonline = '🕵🏻 Listen for online'
-    ru_listenonline = '🕵🏻 Прослушивать онлайн'
+    en_unabletime: str = '❌ *Unable to retrieve last seen timestamp*'
+    ru_unabletime: str = '❌ *Невозможно получить время последнего посещения*'
     # *
-    en_onlinemenuheader = '*Online menu*\n_Listen for user online with own configuration_'
-    ru_onlinemenuheader = '*Онлайн меню*\n_Прослушивание онлайна пользователя с собственной конфигурацией_'
+    en_listenonline: str = '🕵🏻 Listen for online'
+    ru_listenonline: str = '🕵🏻 Отслеживать онлайн'
     # *
-    en_onlinesleep = '⌛ *Online sleep time:* '
-    ru_onlinesleep = '⌛ *Ожидание при онлайне:* '
-    en_offlinesleep = '⌛ *Offline sleep time:* '
-    ru_offlinesleep = '⌛ *Ожидание при оффлайне:* '
+    en_onlinemenuheader: str = '*Online menu*\n_Listen for user online with own configuration_'
+    ru_onlinemenuheader: str = '*Онлайн меню*\n_Отслеживание онлайна пользователя с собственной конфигурацией_'
     # *
-    en_cancellisten = '❌ Cancel listening'
-    ru_cancellisten = '❌ Прервать прослушивание'
+    en_onlinesleep: str = '⌛ *Online sleep time:* '
+    ru_onlinesleep: str = '⌛ *Ожидание при онлайне:* '
+    en_offlinesleep: str = '⌛ *Offline sleep time:* '
+    ru_offlinesleep: str = '⌛ *Ожидание при оффлайне:* '
     # *
-    en_postonlinemenuheader = '*Online listening started*\n_I will send changes in user online_'
-    ru_postonlinemenuheader = '*Прослушивание онлайна началось*\n_Отправлю изменения онлайна пользователя_'
+    en_cancellisten: str = '❌ Cancel listening'
+    ru_cancellisten: str = '❌ Прервать отслеживание'
     # *
-    en_onlinechange = '*Online status change:* '
-    ru_onlinechange = '*Онлайн статус изменился:* '
-    en_onlineupdate = '✒️ *Online updated manually:* _last seen_ '
-    ru_onlineupdate = '✒️ *Онлайн обновился вручную:* _последний раз был(а)_ '
+    en_postonlinemenuheader: str = '*Online listening started*\n_I will send changes in user online_'
+    ru_postonlinemenuheader: str = '*Отслеживание онлайна началось*\n_Отправлю изменения онлайна пользователя_'
     # *
-    en_onlinewentout = '🍂 *User went out from vk:* _last seen_ `%s` _ago_'
-    ru_onlinewentout = '🍂 *Пользователь вышел из вк:* _последний раз был(а)_ `%s` _времени назад_'
+    en_onlinechange: str = '*Online status change:* '
+    ru_onlinechange: str = '*Онлайн статус изменился:* '
+    en_onlineupdate: str = '✒️ *Online updated manually:* _last seen_ '
+    ru_onlineupdate: str = '✒️ *Онлайн обновился вручную:* _последний раз был\(а\)_ '
     # *
-    en_listeninterrupted = '❌ *Listening interrupted*'
-    ru_listeninterrupted = '❌ *Прослушивание прервано*'
-    en_listennotrunning = '❌ *Listening is not running*'
-    ru_listennotrunning = '❌ *Прослушивание не выполняется*'
+    en_onlinewentout: str = '🍂 *User went out from vk:* _last seen_ `%s` _ago_'
+    ru_onlinewentout: str = '🍂 *Пользователь вышел из вк:* _последний раз был\(а\)_ `%s` _назад_'
     # *
-    en_refreshonline = '🔄 Refresh'
-    ru_refreshonline = '🔄 Обновить'
+    en_listeninterrupted: str = '❌ *Listening interrupted*'
+    ru_listeninterrupted: str = '❌ *Отслеживание прервано*'
+    en_listennotrunning: str = '❌ *Listening is not running*'
+    ru_listennotrunning: str = '❌ *Отслеживание не выполняется*'
     # *
-    en_friendsmenu = '👤 Friends'
-    ru_friendsmenu = '👤 Друзья'
+    en_refreshonline: str = '🔄 Refresh'
+    ru_refreshonline: str = '🔄 Обновить'
     # *
-    en_profileclosed = '❌ *Profile is closed*'
-    ru_profileclosed = '❌ *Профиль закрыт*'
+    en_friendsmenu: str = '👤 Friends'
+    ru_friendsmenu: str = '👤 Друзья'
     # *
-    en_analyzefriends = '🕵🏻 Analyze friends'
-    ru_analyzefriends = '🕵🏻 Анализ друзей'
+    en_profileclosed: str = '❌ *Profile is closed*'
+    ru_profileclosed: str = '❌ *Профиль закрыт*'
     # *
-    en_friendsmenuheader = '*Friends menu*\n_Advanced information about the users friends_'
-    ru_friendsmenuheader = '*Меню друзей*\n_Расширенная информация о друзьях пользователя_'
+    en_analyzefriends: str = '🕵🏻 Analyze friends'
+    ru_analyzefriends: str = '🕵🏻 Анализ друзей'
     # *
-    en_analyzefriendsheader = '*Analyze friends*\n_The most common geodata among friends_'
-    ru_analyzefriendsheader = '*Анализ друзей*\n_Самые распространенные геоданные среди друзей_'
+    en_friendsmenuheader: str = '*Friends menu*\n_Advanced information about the users friends_'
+    ru_friendsmenuheader: str = '*Меню друзей*\n_Расширенная информация о друзьях пользователя_'
     # *
-    en_friendscount = '👤 *Friends count:* '
-    ru_friendscount = '👤 *Количество друзей:* '
-    en_country = '🌍 *Country:* '
-    ru_country = '🌍 *Страна:* '
-    en_city = '🏙️ *City:* '
-    ru_city = '🌃 *Город:* '
-    en_university = '🎓 *University:* '
-    ru_university = '🎓 *Университет:* '
-    en_analysistime = '⌛ *Analysis time:* '
-    ru_analysistime = '⌛ *Время анализа:* '
+    en_analyzefriendsheader: str = '*Analyze friends*\n_The most common geodata among friends_'
+    ru_analyzefriendsheader: str = '*Анализ друзей*\n_Самые распространенные геоданные среди друзей_'
+    # *
+    en_friendscount: str = '👤 *Friends count:* '
+    ru_friendscount: str = '👤 *Количество друзей:* '
+    en_country: str = '🌍 *Country:* '
+    ru_country: str = '🌍 *Страна:* '
+    en_city: str = '🏙️ *City:* '
+    ru_city: str = '🏙️ *Город:* '
+    en_university: str = '🎓 *University:* '
+    ru_university: str = '🎓 *Университет:* '
+    en_analysistime: str = '⌛ *Analysis time:* '
+    ru_analysistime: str = '⌛ *Время анализа:* '
+    # *
+    en_searchhidden: str = '🕵🏻 Search for hidden'
+    ru_searchhidden: str = '🕵🏻 Поиск скрытых'
+    # *
+    en_ffreq: str = '⌛ *Getting friends of the users friends\.\.\.*'
+    ru_ffreq: str = '⌛ *Получаю друзей друзей пользователя\.\.\.*'
+    # *
+    en_ffresp: str = '⌛ *Анализирую\.\.\.*'
+    ru_ffresp: str = '⌛ *Анализирую\.\.\.*'
+    # *
+    en_hiddenfriendsheader: str = '*Analyze friends*\n_Hidden user friends_'
+    ru_hiddenfriendsheader: str = '*Анализ друзей*\n_Скрытые друзья пользователя_'
 
 
-def initlogging() -> logging.Logger:
-    logformat = '%(asctime)s (%(filename)s:%(lineno)d %(threadName)s) %(levelname)s - %(name)s: %(message)s'
-
-    logging.basicConfig(level=logging.INFO, format=logformat)
-    LOG = logging.getLogger('fluo')
-
-    return LOG
+# ~
 
 
-def initvkapi(access_token: str) -> vk_api.VkApiMethod:
-    session = vk_api.VkApi(token=access_token)
-    session._auth_token()
+def ml(name: str, locale: str) -> str:
+    return getattr(mlocales, locale + '_' + name)
 
-    return session.get_api()
+
+def initlogging() -> None: 
+    logger.remove(0)
+    logger.add(sys.stdout, format='{time:YYYY/MM/DD ~ HH:mm:ss,SSS} ({file}) {level} :: {message}', level='INFO')
 
 
 def inituser(userid: int) -> None:
     global database
 
-    database.update({userid: {'langaskmessageid': 0, 'locale': '', 'onlinemenumessageid': 0, 'listenonlinestatus': False, 'listeningid': 0, 'onlinesleep': 2.0, 'offlinesleep': 10.0}})
+    database.update({userid: {'locale': '', 'listenonlinestatus': False, 'listeningid': 0, 'onlinesleep': 2.0, 'offlinesleep': 10.0}})
 
 
-def listenonline(targetid: str) -> dict:
+async def listenonline(targetid: str) -> dict:
     global vk
-    global rqtimestamp
-    global rqcount
 
-    # *
+    targetinfo: any = await vk.users.get(user_ids=targetid, fields='online, last_seen')
+    targetinfo = targetinfo[0]
 
-    deltatimestamp = time.time() - rqtimestamp
-
-    if deltatimestamp < 1.0 and rqcount == 3:
-        time.sleep(1.0 - deltatimestamp)
-        rqcount = 0
-
-    rqtimestamp = time.time()
-    rqcount += 1
-
-    # *
-
-    targetinfo = vk.users.get(user_ids=targetid, fields='online, last_seen')[0]
-
-    targetlastseen = targetinfo['last_seen']['time']
-    tmtargetlastseen = time.localtime(targetlastseen)
-    targetlastseentime = time.strftime('%H:%M:%S %d/%m/%Y', tmtargetlastseen)
+    targetlastseen: int = targetinfo.last_seen.time
+    tmtargetlastseen: time.struct_time = time.localtime(targetlastseen)
+    targetlastseentime: str = time.strftime('%H:%M:%S %d/%m/%Y', tmtargetlastseen)
 
     current = int(time.time())
-    currenttime = time.strftime('%H:%M:%S %d/%m/%Y', time.localtime(current))
+    currenttime: str = time.strftime('%H:%M:%S %d/%m/%Y', time.localtime(current))
 
     delta = datetime.timedelta(seconds=current - targetlastseen)
 
     # TODO: errors check ; user can close online during listening or delete account
 
-    status = {'first_name': targetinfo['first_name'],
-            'last_name': targetinfo['last_name'],
-            'online': targetinfo['online'],
+    status: dict = {'first_name': targetinfo.first_name,
+            'last_name': targetinfo.last_name,
+            'online': targetinfo.online,
             'delta': delta,
             'currenttime': currenttime,
             'lastseentime': targetlastseentime,
@@ -204,15 +206,15 @@ def listenonline(targetid: str) -> dict:
     return status
 
 
-def listenthread(bot: telebot.TeleBot) -> None:
+def listenthread(bot: aiog.Bot, loop: asyncio.AbstractEventLoop) -> None:
     global islistenthreadrunning
 
-    LOG.info('open listenthread')
+    logger.info('open listenthread')
 
-    paramsdatabase = {}
+    paramsdatabase: dict = {}
 
     while "'listenonlinestatus': True" in str(database): # TODO
-        prevdatabase = {}
+        prevdatabase: dict = {}
         prevdatabase.update(database)
 
         for user in prevdatabase:
@@ -226,31 +228,33 @@ def listenthread(bot: telebot.TeleBot) -> None:
 
             # *
 
-            onlineinfo = listenonline(prevdatabase[user]['listeningid'])
+            locale: str = prevdatabase[user]['locale']
 
-            onlinestatus = onlineinfo['online']
-            currenttime = onlineinfo['currenttime']
-            lastseensecond = onlineinfo['lastseensecond']
-            lastseentime = onlineinfo['lastseentime']
-            delta = onlineinfo['delta']
+            onlineinfo: dict = asyncio.run_coroutine_threadsafe(listenonline(prevdatabase[user]['listeningid']), loop).result()
 
-            previousonline = paramsdatabase[user]['previousonline']
-            plastseensecond = paramsdatabase[user]['plastseensecond']
-            wentout = paramsdatabase[user]['wentout']
+            onlinestatus: int = onlineinfo['online']
+            currenttime: str = onlineinfo['currenttime']
+            lastseensecond: int = onlineinfo['lastseensecond']
+            lastseentime: str = onlineinfo['lastseentime']
+            delta: datetime.timedelta = onlineinfo['delta']
+
+            previousonline: int = paramsdatabase[user]['previousonline']
+            plastseensecond: int = paramsdatabase[user]['plastseensecond']
+            wentout: any = paramsdatabase[user]['wentout']
 
             if previousonline != -1 and previousonline != onlinestatus:
-                emojistatus = '🟢' if onlinestatus else '🔴'
+                emojistatus: str = '🟢' if onlinestatus else '🔴'
                 paramsdatabase[user]['wentout'] = False if onlinestatus else True
-                bot.send_message(user, f'{emojistatus} {mlocales.en_onlinechange if locale == "en" else mlocales.ru_onlinechange}`{previousonline} -> {onlinestatus}`\n\n` ~ ``{currenttime}`')
+                asyncio.run_coroutine_threadsafe(bot.send_message(user, f'{emojistatus} {ml("onlinechange", locale)}`{previousonline} -> {onlinestatus}`\n\n` ~ ``{currenttime}`'), loop).result()
 
             if plastseensecond != -1 and abs(lastseensecond - plastseensecond) not in [0, 1] and previousonline == onlinestatus:
                 # NOTE: it is more likely that user sent message
                 paramsdatabase[user]['wentout'] = False
-                bot.send_message(user, f"{mlocales.en_onlineupdate if locale == 'en' else mlocales.ru_onlineupdate}`'{paramsdatabase[user]['plastseentime']}' -> '{lastseentime}'`\n\n` ~ ``{currenttime}`")
+                asyncio.run_coroutine_threadsafe(bot.send_message(user, f"{ml('onlineupdate', locale)}`'{paramsdatabase[user]['plastseentime']}' -> '{lastseentime}'`\n\n` ~ ``{currenttime}`"), loop).result()
 
             if wentout != -1 and delta.seconds >= 62 and not wentout:
                 paramsdatabase[user]['wentout'] = True
-                bot.send_message(user, f'{mlocales.en_onlinewentout % delta if locale == "en" else mlocales.ru_onlinewentout % delta}\n\n` ~ ``{currenttime}`')
+                asyncio.run_coroutine_threadsafe(bot.send_message(user, f'{ml("onlinewentout", locale) % delta}\n\n` ~ ``{currenttime}`'), loop).result()
                 
             paramsdatabase[user]['previousonline'] = onlinestatus
             paramsdatabase[user]['plastseensecond'] = lastseensecond
@@ -258,7 +262,7 @@ def listenthread(bot: telebot.TeleBot) -> None:
 
             paramsdatabase[user]['timeout'] = time.time() + (prevdatabase[user]['onlinesleep'] if onlinestatus else prevdatabase[user]['offlinesleep'])
     
-    LOG.info('close listenthread')
+    logger.info('close listenthread')
 
     islistenthreadrunning = False
 
@@ -267,293 +271,280 @@ def commonfromlist(x: list) -> any:
     return max(set(x), key=x.count) if x else 'None'
 
 
-def inithooks(bot: telebot.TeleBot) -> None:
-    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0)
-    def link(message) -> None:
-        global vk
+def inithooks() -> None:
+    @dp.message_handler(lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0)
+    async def link(message: aiog.types.Message) -> None:
+        chatid: int = message.chat.id
+        locale: str = database[chatid]['locale']
 
-        chatid = message.chat.id
-        locale = database[chatid]['locale']
+        statusmessage: aiog.types.Message = await message.answer(ml('sendreq', locale))
 
-        statusmessage = bot.send_message(chatid, mlocales.en_sendreq if locale == 'en' else mlocales.ru_sendreq)
+        profilename: str = re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)[0][1]
+        profileinfo: list = await vk.users.get(user_ids=profilename, fields='status, online, last_seen')
 
-        profilename = re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)[0][1]
-        profileinfo = vk.users.get(user_ids=profilename, fields='status, online, last_seen')
-
-        if len(profileinfo) == 0:
-            bot.edit_message_text(mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists, chatid, statusmessage.id)
+        if not len(profileinfo):
+            await statusmessage.edit_text(ml('usernotexists', locale))
             return
 
         profileinfo = profileinfo[0]
 
-        bot.edit_message_text(mlocales.en_parseresp if locale == 'en' else mlocales.ru_parseresp, chatid, statusmessage.id)
+        await statusmessage.edit_text(ml('parseresp', locale))
 
-        foafrequest = requests.get(f'https://vk.com/foaf.php?id={profileinfo["id"]}')
-        registrationdate = str(re.findall(b'<ya:created dc:date="[0-9A-Z:+-]{25}"\/>', foafrequest.content)[0], 'utf-8').split('"')[1]
+        async with aioh.ClientSession() as session:
+            async with session.get(f'https://vk.com/foaf.php?id={profileinfo.id}') as foafrequest:
+                registrationdate: str = re.findall('<ya:created dc:date="([0-9A-Z:+-]{25})"/>', await foafrequest.text())[0]
 
-        inlinemarkup = types.InlineKeyboardMarkup()
-        profilebutton = types.InlineKeyboardButton(mlocales.en_profilephoto if locale == 'en' else mlocales.ru_profilephoto, callback_data=f'photo;{profileinfo["id"]}')
-        vkonlinebutton = types.InlineKeyboardButton(mlocales.en_onlinemenu if locale == 'en' else mlocales.ru_onlinemenu, callback_data=f'onlinemenu;{profileinfo["id"] if "last_seen" in profileinfo else "-1"}')
-        friendsbutton = types.InlineKeyboardButton(mlocales.en_friendsmenu if locale == 'en' else mlocales.ru_friendsmenu, callback_data=f'friendsmenu;{profileinfo["id"] if not profileinfo["is_closed"] else "-1"}')
-        refreshbutton = types.InlineKeyboardButton(mlocales.en_refreshonline if locale == 'en' else mlocales.ru_refreshonline, callback_data=f'refresh;{profileinfo["id"]}')
+        inlinemarkup = aiog.types.InlineKeyboardMarkup()
+        profilebutton = aiog.types.InlineKeyboardButton(ml('profilephoto', locale), callback_data=f'photo;{profileinfo.id}')
+        vkonlinebutton = aiog.types.InlineKeyboardButton(ml('onlinemenu', locale), callback_data=f'onlinemenu;{profileinfo.id if profileinfo.last_seen is not None else "-1"}') # TODO: check inside call
+        friendsbutton = aiog.types.InlineKeyboardButton(ml('friendsmenu', locale), callback_data=f'friendsmenu;{profileinfo.id if not profileinfo.is_closed else "-1"}')
+        refreshbutton = aiog.types.InlineKeyboardButton(ml('refreshonline', locale), callback_data=f'refresh;{profileinfo.id}')
         inlinemarkup.add(profilebutton, vkonlinebutton, friendsbutton, refreshbutton)
 
-        if 'last_seen' in profileinfo:
-            delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
-            lastseentime = str(mlocales.en_onlinelastseen % delta if locale == 'en' else mlocales.ru_onlinelastseen % delta) if profileinfo['online'] else str(mlocales.en_offlinelastseen % delta if locale == 'en' else mlocales.ru_offlinelastseen % delta)
+        if profileinfo.last_seen is not None:
+            delta = datetime.timedelta(seconds=int(time.time()) - profileinfo.last_seen.time)
+            lastseentime: str = ml('onlinelastseen', locale) % delta if profileinfo.online else ml('offlinelastseen', locale) % delta
         else:
-            lastseentime = str(mlocales.en_online if locale == 'en' else mlocales.ru_online) if profileinfo['online'] else str(mlocales.en_offline if locale == 'en' else mlocales.ru_offline)
+            lastseentime: str = ml('online', locale) if profileinfo.online else ml('offline', locale)
 
-        bot.edit_message_text(f'*{profileinfo["first_name"]} {profileinfo["last_name"]}*\n_{profileinfo["status"]}_\n{lastseentime}\n\n👁‍🗨 *ID:* `{profileinfo["id"]}`\n{mlocales.en_closed if locale == "en" else mlocales.ru_closed}`{profileinfo["is_closed"]}`\n{mlocales.en_created if locale == "en" else mlocales.ru_created}`{registrationdate}`', chatid, statusmessage.id, reply_markup=inlinemarkup)
+        await statusmessage.edit_text(f'*{profileinfo.first_name} {profileinfo.last_name}*\n_{profileinfo.status}_\n{lastseentime} {ml(f"platform_{profileinfo.last_seen.platform}", "emoji") if profileinfo.last_seen is not None else ""}\n\n👁‍🗨 *ID:* `{profileinfo.id}`\n{ml("closed", locale)}`{profileinfo.is_closed}`\n{ml("created", locale)}`{registrationdate}`', reply_markup=inlinemarkup, parse_mode='markdown')
 
-    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and message.content_type == 'text' and message.text.startswith('/settings'))
-    def settings(message) -> None:
-        return # TODO
+    
+    @dp.message_handler(lambda message: message.chat.id not in database)
+    async def prewelcome(message: aiog.types.Message) -> None:
+        inituser(message.chat.id)
 
-    @bot.message_handler(func=lambda message: message.chat.id not in database)
-    def prewelcome(message) -> None:
-        global database
-
-        chatid = message.chat.id
-
-        inituser(chatid)
-
-        inlinemarkup = types.InlineKeyboardMarkup()
-        rubutton = types.InlineKeyboardButton('🇷🇺 Russian', callback_data=f'setlang;ru')
-        enbutton = types.InlineKeyboardButton('🇬🇧 English', callback_data=f'setlang;en')
+        inlinemarkup = aiog.types.InlineKeyboardMarkup()
+        rubutton = aiog.types.InlineKeyboardButton('🇷🇺 Russian', callback_data=f'setlang;ru')
+        enbutton = aiog.types.InlineKeyboardButton('🇬🇧 English', callback_data=f'setlang;en')
         inlinemarkup.add(rubutton, enbutton)
 
-        askmessage = bot.send_message(chatid, '🌍 *Choose language*', reply_markup=inlinemarkup)
+        await message.answer('🌍 *Choose language*', reply_markup=inlinemarkup)
 
-        database[chatid]['langaskmessageid'] = askmessage.id
-
-    @bot.message_handler(func=lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '')
-    def welcome(message) -> None:
-        chatid = message.chat.id
-        bot.send_message(chatid, mlocales.en_profilelink if database[chatid]['locale'] == 'en' else mlocales.ru_profilelink)
+    @dp.message_handler(lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '')
+    async def welcome(message: aiog.types.Message) -> None:
+        await message.answer(ml('profilelink', database[message.chat.id]['locale']))  
 
 
-def initcallbacks(bot: telebot.TeleBot) -> None:
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('refresh;'))
-    def refreshcall(call) -> None:
-        global vk
-
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
-
-        targetid = call.data.split(';')[1]
-        profileinfo = vk.users.get(user_ids=targetid, fields='status, online, last_seen')
-
-        if len(profileinfo) == 0:
-            bot.send_message(chatid, mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists)
-            return
-
-        profileinfo = profileinfo[0]
-
-        if 'last_seen' not in profileinfo:
-            bot.send_message(chatid, mlocales.en_unabletime if locale == 'en' else mlocales.ru_unabletime)
-            return
-
-        delta = datetime.timedelta(seconds=int(time.time()) - profileinfo['last_seen']['time'])
-        lastseentime = str(mlocales.en_onlinelastseen % delta if locale == 'en' else mlocales.ru_onlinelastseen % delta) if profileinfo['online'] else str(mlocales.en_offlinelastseen % delta if locale == 'en' else mlocales.ru_offlinelastseen % delta)
-
-        bot.send_message(chatid, f'{mlocales.emoji_detective} *{profileinfo["first_name"]} {profileinfo["last_name"]}*` :: `{lastseentime}')
-
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('setlang;'))
-    def setlangcall(call) -> None:
-        global vk
+def initcallbacks() -> None:
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('setlang;'))
+    async def setlangcall(callback_query: aiog.types.CallbackQuery) -> None:
         global database
 
-        chatid = call.message.chat.id
-        targetlocale = call.data.split(';')[1]
+        chatid: int = callback_query.message.chat.id
+        targetlocale: str = callback_query.data.split(';')[1]
 
         database[chatid]['locale'] = targetlocale
 
-        bot.edit_message_text(mlocales.en_localeset if targetlocale == 'en' else mlocales.ru_localeset, chatid, database[chatid]['langaskmessageid'])
-        bot.send_message(chatid, mlocales.en_profilelink if targetlocale == 'en' else mlocales.ru_profilelink)
+        await callback_query.message.edit_text(ml('localeset', targetlocale))
+        await callback_query.message.answer(ml('profilelink', targetlocale))
 
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('photo;'))
-    def photocall(call) -> None:
-        global vk
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('photo;'))
+    async def photocall(callback_query: aiog.types.CallbackQuery) -> None:
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
 
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
+        statusmessage: aiog.types.Message = await callback_query.message.answer(ml('imagereq', locale))
 
-        requestmessage = bot.send_message(chatid, mlocales.en_imagereq if locale == 'en' else mlocales.ru_imagereq)
+        targetid: str = callback_query.data.split(';')[1]
+        targetinfo: list = await vk.users.get(user_ids=targetid, fields='photo_max_orig, domain')
 
-        targetid = call.data.split(';')[1]
-        targetinfo = vk.users.get(user_ids=targetid, fields='photo_max_orig, domain')
-
-        if len(targetinfo) == 0:
-            bot.edit_message_text(mlocales.en_usernotexists if locale == 'en' else mlocales.ru_usernotexists, chatid, requestmessage.id)
+        if not len(targetinfo):
+            statusmessage.edit_text(ml('usernotexists', locale))
             return
 
         targetinfo = targetinfo[0]
-        targetphotourl = targetinfo['photo_max_orig']
+        targetphotourl: str = targetinfo.photo_max_orig
 
-        photosize = re.findall('size=(.*)&q', targetphotourl)
+        # TODO: check: photo is set
+
+        photosize: list = re.findall('size=(.*)&q', targetphotourl)
         photosize = photosize[0] if len(photosize) > 0 else '~x~'
 
-        caption = photosize + f'` :: `vk.com/{targetinfo["domain"]}'
+        caption: str = photosize + f'` :: `vk\.com/id{targetid}'
 
-        request = requests.get(targetphotourl, timeout=4)
-        photoio = io.BytesIO(request.content)
+        async with aioh.ClientSession() as session:
+            async with session.get(targetphotourl) as photorequest:
+                photoio = io.BytesIO(await photorequest.read())
 
-        bot.send_photo(chatid, photoio, caption=caption)
+        await bot.send_photo(chatid, photoio, caption)
 
         photoio.close()
-
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('onlinemenu;'))
-    def onlinemenucall(call) -> None:
-        global database
-
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
+    
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('onlinemenu;'))
+    async def onlinemenucall(callback_query: aiog.types.CallbackQuery) -> None:
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
 
         if database[chatid]['listenonlinestatus']:
-            bot.send_message(chatid, mlocales.en_listenalready if locale == 'en' else mlocales.ru_listenalready)
+            await callback_query.message.answer(ml('listenalready', locale))
             return
 
-        targetid = call.data.split(';')[1]
+        targetid: str = callback_query.data.split(';')[1]
 
         if targetid == '-1':
-            bot.send_message(chatid, mlocales.en_unabletime if locale == 'en' else mlocales.ru_unabletime)
+            await callback_query.message.answer(ml('unabletime', locale))
             return
 
-        markupinline = types.InlineKeyboardMarkup()
-        listenbutton = types.InlineKeyboardButton(mlocales.en_listenonline if locale == 'en' else mlocales.ru_listenonline, callback_data=f'startlistenonline;{targetid}')
+        markupinline = aiog.types.InlineKeyboardMarkup()
+        listenbutton = aiog.types.InlineKeyboardButton(ml('listenonline', locale), callback_data=f'startlistenonline;{targetid}')
         markupinline.add(listenbutton)
 
-        message = bot.send_message(chatid, f'{mlocales.en_onlinemenuheader if locale == "en" else mlocales.ru_onlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{database[chatid]["onlinesleep"]}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{database[chatid]["offlinesleep"]}s`', reply_markup=markupinline)
+        await callback_query.message.answer(f'{ml("onlinemenuheader", locale)}\n\n👁‍🗨 *ID:* `{targetid}`\n{ml("onlinesleep", locale)}`{database[chatid]["onlinesleep"]}s`\n{ml("offlinesleep", locale)}`{database[chatid]["offlinesleep"]}s`', reply_markup=markupinline)
 
-        database[chatid]['onlinemenumessageid'] = message.id
 
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('friendsmenu;'))
-    def friendsmenucall(call) -> None:
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
-
-        targetid = call.data.split(';')[1]
-
-        if targetid == '-1':
-            bot.send_message(chatid, mlocales.en_profileclosed if locale == 'en' else mlocales.ru_profileclosed)
-            return
-        
-        markupinline = types.InlineKeyboardMarkup()
-        analyzebutton = types.InlineKeyboardButton(mlocales.en_analyzefriends if locale == 'en' else mlocales.ru_analyzefriends, callback_data=f'analyzefriends;{targetid}')
-        markupinline.add(analyzebutton)
-
-        bot.send_message(chatid, f'{mlocales.en_friendsmenuheader if locale == "en" else mlocales.ru_friendsmenuheader}\n\n👁‍🗨 *ID:* `{targetid}`', reply_markup=markupinline)
-
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('startlistenonline;'))
-    def listenonlinecall(call) -> None:
-        global LOG
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('startlistenonline;'))
+    async def listenonlinecall(callback_query: aiog.types.CallbackQuery) -> None:
         global database
         global islistenthreadrunning
 
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
         
-        targetid = call.data.split(';')[1]
+        targetid: str = callback_query.data.split(';')[1]
 
         database[chatid]['listeningid'] = targetid
         database[chatid]['listenonlinestatus'] = True
 
-        markupinline = types.InlineKeyboardMarkup()
-        cancelbutton = types.InlineKeyboardButton(mlocales.en_cancellisten if locale == 'en' else mlocales.ru_cancellisten, callback_data=f'interruptlistenonline;')
+        markupinline = aiog.types.InlineKeyboardMarkup()
+        cancelbutton = aiog.types.InlineKeyboardButton(ml('cancellisten', locale), callback_data=f'interruptlistenonline;')
         markupinline.add(cancelbutton)
 
-        bot.edit_message_text(f'{mlocales.en_postonlinemenuheader if locale == "en" else mlocales.ru_postonlinemenuheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_onlinesleep if locale == "en" else mlocales.ru_onlinesleep}`{database[chatid]["onlinesleep"]}s`\n{mlocales.en_offlinesleep if locale == "en" else mlocales.ru_offlinesleep}`{database[chatid]["offlinesleep"]}s`', chatid, database[chatid]['onlinemenumessageid'], reply_markup=markupinline)
+        await callback_query.message.edit_text(f'{ml("postonlinemenuheader", locale)}\n\n👁‍🗨 *ID:* `{targetid}`\n{ml("onlinesleep", locale)}`{database[chatid]["onlinesleep"]}s`\n{ml("offlinesleep", locale)}`{database[chatid]["offlinesleep"]}s`', reply_markup=markupinline)
 
-        LOG.info(f'start listening: id{targetid}')
+        logger.info(f'start listening: id{targetid}')
 
         if not islistenthreadrunning:
+            aloop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
             islistenthreadrunning = True
-            lthread = threading.Thread(target=listenthread, args=(bot,))
+            
+            lthread = threading.Thread(target=listenthread, args=(bot, aloop))
             lthread.start()
 
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('analyzefriends;'))
-    def analyzefriendscall(call) -> None:
-        global vk
-        global LOG
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('interruptlistenonline;'))
+    async def interruptlisten(callback_query: aiog.types.CallbackQuery) -> None:
+        global database
 
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
+
+        await callback_query.message.answer(ml('listeninterrupted', locale) if database[chatid]['listenonlinestatus'] else ml('listennotrunning', locale))
         
-        targetid = call.data.split(';')[1]
+        database[chatid]['listenonlinestatus'] = False
+        logger.info(f'interrupt listening: {database[chatid]["listeningid"]}')
+    
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('refresh;'))
+    async def refreshcall(callback_query: aiog.types.CallbackQuery) -> None:
+        global vk
 
-        statusmessage = bot.send_message(chatid, mlocales.en_sendreq if locale == 'en' else mlocales.ru_sendreq)
-        targetfriends = vk.friends.get(user_id=targetid, fields='city, country, universities')
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
+
+        targetid: str = callback_query.data.split(';')[1]
+        profileinfo: list = await vk.users.get(user_ids=targetid, fields='status, online, last_seen')
+
+        if not len(profileinfo):
+            await callback_query.message.answer(ml('usernotexists', locale))
+            return
+
+        profileinfo = profileinfo[0]
+
+        if profileinfo.last_seen is None:
+            await callback_query.message.answer(ml('unabletime', locale))
+            return
+
+        delta = datetime.timedelta(seconds=int(time.time()) - profileinfo.last_seen.time)
+        lastseentime: str = ml('onlinelastseen', locale) % delta if profileinfo.online else ml('offlinelastseen', locale) % delta
+
+        await callback_query.message.answer(f'{mlocales.emoji_detective} *{profileinfo.first_name} {profileinfo.last_name}*` :: `{lastseentime}', 'markdown')
+    
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('friendsmenu;'))
+    async def friendsmenucall(callback_query: aiog.types.CallbackQuery) -> None:
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
+
+        targetid: str = callback_query.data.split(';')[1]
+
+        if targetid == '-1':
+            await callback_query.message.answer(ml('profileclosed', locale))
+            return
+
+        markupinline = aiog.types.InlineKeyboardMarkup()
+        analyzebutton = aiog.types.InlineKeyboardButton(ml('analyzefriends', locale), callback_data=f'analyzefriends;{targetid}')
+        # searchhiddenbutton = aiog.types.InlineKeyboardButton(ml('searchhidden', locale), callback_data=f'searchhidden;{targetid}')
+        markupinline.add(analyzebutton) # , searchhiddenbutton)
+
+        await callback_query.message.answer(f'{ml("friendsmenuheader", locale)}\n\n👁‍🗨 *ID:* `{targetid}`', reply_markup=markupinline)
+
+    @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('analyzefriends;'))
+    async def analyzefriendscall(callback_query: aiog.types.CallbackQuery) -> None:
+        chatid: int = callback_query.message.chat.id
+        locale: str = database[chatid]['locale']
+        
+        targetid: str = callback_query.data.split(';')[1]
+
+        statusmessage: aiog.types.Message = await callback_query.message.answer(ml('sendreq', locale))
+        targetfriends: any = await vk.friends.get(user_id=targetid, fields='city, country, universities')
 
         # TODO: errors check
 
-        bot.edit_message_text(mlocales.en_parseresp if locale == 'en' else mlocales.ru_parseresp, chatid, statusmessage.id)
+        await statusmessage.edit_text(ml('parseresp', locale))
 
-        tstart = time.time()
-        countries, cities, universities = [], [], []
+        tstart: float = time.time()
 
-        for friend in targetfriends['items']:
-            if 'country' in friend and re.search('[a-zA-Zа-яА-Я]', friend['country']['title']):
-                countries.append(friend['country']['title'])
+        countries: list = []
+        cities: list = []
+        universities: list = []
 
-            if 'city' in friend and re.search('[a-zA-Zа-яА-Я]', friend['city']['title']):
-                cities.append(friend['city']['title'])
+        for friend in targetfriends.items:
+            if friend.country is not None and re.search('[a-zA-Zа-яА-Я]', friend.country.title):
+                countries.append(friend.country.title)
 
-            if 'universities' in friend and len(friend['universities']) > 0 and re.search('[a-zA-Zа-яА-Я]', friend['universities'][0]['name']):
-                universities.append(friend['universities'][0]['name'])
+            if friend.city is not None and re.search('[a-zA-Zа-яА-Я]', friend.city.title):
+                cities.append(friend.city.title)
 
-        country, city, university = commonfromlist(countries), commonfromlist(cities), commonfromlist(universities)
-        tend = time.time()
+            if friend.universities is not None and len(friend.universities) > 0 and re.search('[a-zA-Zа-яА-Я]', friend.universities[0].name):
+                universities.append(friend.universities[0].name)
 
-        bot.edit_message_text(f'{mlocales.en_analyzefriendsheader if locale == "en" else mlocales.ru_analyzefriendsheader}\n\n👁‍🗨 *ID:* `{targetid}`\n{mlocales.en_friendscount if locale == "en" else mlocales.ru_friendscount}`{targetfriends["count"]}`\n{mlocales.en_country if locale == "en" else mlocales.ru_country}`{country}`\n{mlocales.en_city if locale == "en" else mlocales.ru_city}`{city}`\n{mlocales.en_university if locale == "en" else mlocales.ru_university}`{university}`\n{mlocales.en_analysistime if locale == "en" else mlocales.ru_analysistime}`{round((tend - tstart) * 1000)}ms`', chatid, statusmessage.id)
+        country: str = commonfromlist(countries)
+        city: str = commonfromlist(cities)
+        university: str = commonfromlist(universities)
 
-    @bot.callback_query_handler(func=lambda call: call.message.chat.id in database and call.data.startswith('interruptlistenonline;'))
-    def interruptlisten(call) -> None:
-        global database
+        tend: float = time.time()
 
-        # NOTE: workerthreads limit is set to 2.
-
-        chatid = call.message.chat.id
-        locale = database[chatid]['locale']
-
-        bot.send_message(chatid, str(mlocales.en_listeninterrupted if locale == 'en' else mlocales.ru_listeninterrupted) if database[chatid]['listenonlinestatus'] else str(mlocales.en_listennotrunning if locale == 'en' else mlocales.ru_listennotrunning))
-        database[chatid]['listenonlinestatus'] = False
-
-        LOG.info(f'interrupt listening: {database[chatid]["listeningid"]}')
+        await statusmessage.edit_text(f'{ml("analyzefriendsheader", locale)}\n\n👁‍🗨 *ID:* `{targetid}`\n\n{ml("friendscount", locale)}`{targetfriends.count}`\n{ml("country", locale)}`{country}`\n{ml("city", locale)}`{city}`\n{ml("university", locale)}`{university}`\n{ml("analysistime", locale)}`{round((tend - tstart) * 1000)}ms`')
 
 
-def main() -> int:
-    global LOG
+def main(argc: int, argv: list) -> int:
     global vk
+    global bot
+    global dp
 
-    LOG = initlogging()
+    initlogging()
 
-    LOG.info('init vk-api')
+    logger.info('init vkbottle')
+    vk = vkbottle.API(token=vk_app_token)
+    
+    logger.info('init aiogram')
+    bot = aiog.Bot(token=tg_bot_token, parse_mode='markdownv2')
+    dp = aiog.Dispatcher(bot)
 
-    vk = initvkapi(vk_app_token)
+    logger.info('init hooks')
+    inithooks()
 
-    LOG.info('init telebot')
+    logger.info('init callbacks')
+    initcallbacks()
 
-    bot = telebot.TeleBot(tg_bot_token, parse_mode='markdown')
-
-    LOG.info('init callbacks')
-
-    initcallbacks(bot)
-
-    LOG.info('init hooks')
-
-    inithooks(bot)
-
-    bot.infinity_polling()
+    aiog.executor.start_polling(dp, skip_updates=True)
 
 
 if __name__ == '__main__':
     try:
-        status = main()
+        status: int = main(len(sys.argv), sys.argv)
     except KeyboardInterrupt:
-        status = 0
+        status: int = 0
     except Exception as e:
-        status = 1
+        status: int = 1
 
         for i in range(1, 6):
             print(f' * ~ {e.__name__}, restarting {i}/5 ...')
@@ -561,6 +552,9 @@ if __name__ == '__main__':
 
             try:
                 status = main()
+                break
+            except KeyboardInterrupt:
+                status: int = 0
                 break
             except Exception:
                 pass
