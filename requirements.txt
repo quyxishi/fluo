@@ -1,2 +1,4 @@
-pyTelegramBotAPI
-vk-api
+loguru
+aiogram
+aiohttp[speedups]
+vkbottle
