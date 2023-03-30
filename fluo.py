@@ -1,3 +1,4 @@
+from vkbottle import VKAPIError
 from dataclasses import dataclass
 from loguru import logger
 import aiogram as aiog
@@ -23,6 +24,7 @@ tg_bot_token: str = '<telegram bot token>'
 # *
 
 vk: vkbottle.API
+er: vkbottle.ErrorHandler
 bot: aiog.Bot
 dp: aiog.Dispatcher
 
@@ -158,7 +160,12 @@ class mlocales:
     # *
     en_hiddenfriendsheader: str = '*Analyze friends*\n_Hidden user friends_'
     ru_hiddenfriendsheader: str = '*Анализ друзей*\n_Скрытые друзья пользователя_'
-
+    # *
+    en_restrictedprofile: str = '❌ *Profile deleted or blocked*'
+    ru_restrictedprofile: str = '❌ *Профиль удален либо же заблокирован*'
+    # *
+    en_unknownerror: str = '❌ *Unknown error: VKAPIError code %s*'
+    ru_unknownerror: str = '❌ *Неизвестная ошибка: VKAPIError код %s*'
 
 # ~
 
@@ -272,7 +279,28 @@ def commonfromlist(x: list) -> any:
 
 
 def inithooks() -> None:
+    @er.register_error_handler(VKAPIError[30])
+    async def vkclosederror(e: VKAPIError, *args: list) -> None:
+        obj: any = args[0].message if args[0].__class__ is aiog.types.CallbackQuery else args[0]
+        
+        await obj.answer(ml('profileclosed', database[obj.chat.id]['locale']))
+    
+    @er.register_error_handler(VKAPIError[18])
+    async def vkrestrictederror(e: VKAPIError, *args: list) -> None:
+        obj: any = args[0].message if args[0].__class__ is aiog.types.CallbackQuery else args[0]
+
+        await obj.answer(ml('restrictedprofile', database[obj.chat.id]['locale']))
+    
+    @er.register_error_handler(VKAPIError)
+    async def vkunknownerror(e: VKAPIError, *args: list) -> None:
+        obj: any = args[0].message if args[0].__class__ is aiog.types.CallbackQuery else args[0]
+
+        await obj.answer(ml('unknownerror', database[obj.chat.id]['locale']) % e.code)
+
+    # *
+
     @dp.message_handler(lambda message: message.chat.id in database and database[message.chat.id]['locale'] != '' and len(re.findall('(vk\.com/|^)([a-zA-Z0-9\._]{3,32}$)', message.text)) != 0)
+    @er.catch
     async def link(message: aiog.types.Message) -> None:
         chatid: int = message.chat.id
         locale: str = database[chatid]['locale']
@@ -297,7 +325,7 @@ def inithooks() -> None:
         inlinemarkup = aiog.types.InlineKeyboardMarkup()
         profilebutton = aiog.types.InlineKeyboardButton(ml('profilephoto', locale), callback_data=f'photo;{profileinfo.id}')
         vkonlinebutton = aiog.types.InlineKeyboardButton(ml('onlinemenu', locale), callback_data=f'onlinemenu;{profileinfo.id if profileinfo.last_seen is not None else "-1"}') # TODO: check inside call
-        friendsbutton = aiog.types.InlineKeyboardButton(ml('friendsmenu', locale), callback_data=f'friendsmenu;{profileinfo.id if not profileinfo.is_closed else "-1"}')
+        friendsbutton = aiog.types.InlineKeyboardButton(ml('friendsmenu', locale), callback_data=f'friendsmenu;{profileinfo.id}')
         refreshbutton = aiog.types.InlineKeyboardButton(ml('refreshonline', locale), callback_data=f'refresh;{profileinfo.id}')
         inlinemarkup.add(profilebutton, vkonlinebutton, friendsbutton, refreshbutton)
 
@@ -340,6 +368,7 @@ def initcallbacks() -> None:
         await callback_query.message.answer(ml('profilelink', targetlocale))
 
     @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('photo;'))
+    @er.catch
     async def photocall(callback_query: aiog.types.CallbackQuery) -> None:
         chatid: int = callback_query.message.chat.id
         locale: str = database[chatid]['locale']
@@ -431,9 +460,10 @@ def initcallbacks() -> None:
         await callback_query.message.answer(ml('listeninterrupted', locale) if database[chatid]['listenonlinestatus'] else ml('listennotrunning', locale))
         
         database[chatid]['listenonlinestatus'] = False
-        logger.info(f'interrupt listening: {database[chatid]["listeningid"]}')
+        logger.info(f'interrupt listening: id{database[chatid]["listeningid"]}')
     
     @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('refresh;'))
+    @er.catch
     async def refreshcall(callback_query: aiog.types.CallbackQuery) -> None:
         global vk
 
@@ -465,10 +495,6 @@ def initcallbacks() -> None:
 
         targetid: str = callback_query.data.split(';')[1]
 
-        if targetid == '-1':
-            await callback_query.message.answer(ml('profileclosed', locale))
-            return
-
         markupinline = aiog.types.InlineKeyboardMarkup()
         analyzebutton = aiog.types.InlineKeyboardButton(ml('analyzefriends', locale), callback_data=f'analyzefriends;{targetid}')
         # searchhiddenbutton = aiog.types.InlineKeyboardButton(ml('searchhidden', locale), callback_data=f'searchhidden;{targetid}')
@@ -477,6 +503,7 @@ def initcallbacks() -> None:
         await callback_query.message.answer(f'{ml("friendsmenuheader", locale)}\n\n👁‍🗨 *ID:* `{targetid}`', reply_markup=markupinline)
 
     @dp.callback_query_handler(lambda callback_query: callback_query.message.chat.id in database and callback_query.data.startswith('analyzefriends;'))
+    @er.catch
     async def analyzefriendscall(callback_query: aiog.types.CallbackQuery) -> None:
         chatid: int = callback_query.message.chat.id
         locale: str = database[chatid]['locale']
@@ -485,8 +512,6 @@ def initcallbacks() -> None:
 
         statusmessage: aiog.types.Message = await callback_query.message.answer(ml('sendreq', locale))
         targetfriends: any = await vk.friends.get(user_id=targetid, fields='city, country, universities')
-
-        # TODO: errors check
 
         await statusmessage.edit_text(ml('parseresp', locale))
 
@@ -517,6 +542,7 @@ def initcallbacks() -> None:
 
 def main(argc: int, argv: list) -> int:
     global vk
+    global er
     global bot
     global dp
 
@@ -524,7 +550,8 @@ def main(argc: int, argv: list) -> int:
 
     logger.info('init vkbottle')
     vk = vkbottle.API(token=vk_app_token)
-    
+    er = vkbottle.ErrorHandler(True)
+
     logger.info('init aiogram')
     bot = aiog.Bot(token=tg_bot_token, parse_mode='markdownv2')
     dp = aiog.Dispatcher(bot)
@@ -554,7 +581,7 @@ if __name__ == '__main__':
                 status = main()
                 break
             except KeyboardInterrupt:
-                status: int = 0
+                status = 0
                 break
             except Exception:
                 pass
